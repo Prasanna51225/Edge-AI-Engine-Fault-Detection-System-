@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Health Monitor</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/framer-motion@10/dist/framer-motion.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Add SheetJS for Excel export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- Add Chart.js for visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+        }
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .backdrop-blur-md {
+            backdrop-filter: blur(12px);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const { motion } = window.Motion;
+
+        // Error Boundary Component to catch chart rendering errors
+        class ChartErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+
+            componentDidCatch(error, errorInfo) {
+                console.error('Chart Error:', error, errorInfo);
+            }
+
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="bg-red-100 border border-red-300 p-4 rounded-lg">
+                            <p className="text-red-700 text-sm">
+                                 Chart rendering error. Data is still being tracked.
+                            </p>
+                            <button 
+                                onClick={() => this.setState({ hasError: false, error: null })}
+                                className="mt-2 px-3 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600"
+                            >
+                                Retry Chart
+                            </button>
+                        </div>
+                    );
+                }
+
+                return this.props.children;
+            }
+        }
+
+        const CarHealthMonitor = () => {
+            const [carStatus, setCarStatus] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [lastUpdated, setLastUpdated] = useState(new Date());
+            const [connectionStatus, setConnectionStatus] = useState('connecting');
+            
+            // Service tracking states
+            const [showServiceForm, setShowServiceForm] = useState(false);
+            const [serviceDate, setServiceDate] = useState('');
+            const [serviceType, setServiceType] = useState('Regular Maintenance');
+            const [serviceCost, setServiceCost] = useState('');
+            const [serviceHistory, setServiceHistory] = useState([]);
+            
+            // Chart reference
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+            
+            // Location state
+            const [location, setLocation] = useState({
+                lat: null,
+                lng: null,
+                city: 'Loading...'
+            });
+
+            // ThingSpeak channel configuration
+            const CHANNEL_ID = '3040064';
+            const READ_API_KEY = '5Z2002LZQRPQLVDS';
+
+            // Load service history from localStorage on component mount
+            useEffect(() => {
+                const savedHistory = localStorage.getItem('serviceHistory');
+                if (savedHistory) {
+                    try {
+                        setServiceHistory(JSON.parse(savedHistory));
+                    } catch (err) {
+                        console.error('Error loading service history:', err);
+                    }
+                }
+            }, []);
+
+            // Get city name from coordinates
+            const getCityFromCoords = async (lat, lng) => {
+                try {
+                    const response = await fetch(
+                        `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
+                    );
+                    const data = await response.json();
+                    return data.city || data.locality || 'Unknown City';
+                } catch (err) {
+                    console.log('City lookup failed:', err);
+                    return 'Unknown City';
+                }
+            };
+
+            // Fetch data AND location from ThingSpeak
+            const fetchCarData = async () => {
+                try {
+                    setLoading(true);
+                    setError(null);
+                    setConnectionStatus('fetching');
+                    
+                    const response = await fetch(
+                        `https://api.thingspeak.com/channels/${CHANNEL_ID}/feeds.json?api_key=${READ_API_KEY}&results=1`
+                    );
+                    
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data && data.feeds && data.feeds.length > 0) {
+                        const fieldValue = parseInt(data.feeds[0].field1);
+                        if (!isNaN(fieldValue)) {
+                            setCarStatus(fieldValue);
+                            setLastUpdated(new Date());
+                            setConnectionStatus('connected');
+                            console.log('Real data from ThingSpeak:', fieldValue);
+                        }
+                        
+                        if (data.channel && data.channel.latitude && data.channel.longitude) {
+                            const lat = parseFloat(data.channel.latitude);
+                            const lng = parseFloat(data.channel.longitude);
+                            
+                            const cityName = await getCityFromCoords(lat, lng);
+                            
+                            setLocation({
+                                lat: lat.toFixed(4),
+                                lng: lng.toFixed(4),
+                                city: cityName
+                            });
+                            
+                            console.log('Real location from ThingSpeak:', lat, lng, cityName);
+                        }
+                    } else {
+                        throw new Error('No data available from ThingSpeak channel');
+                    }
+                } catch (err) {
+                    console.error('Error fetching car data:', err);
+                    setError(`Connection Error: ${err.message}`);
+                    setConnectionStatus('error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            // Auto-fetch data every 8 seconds
+            useEffect(() => {
+                fetchCarData();
+                const intervalId = setInterval(fetchCarData, 8000);
+                return () => clearInterval(intervalId);
+            }, []);
+
+            // Add service record
+            const addServiceRecord = () => {
+                if (!serviceDate) {
+                    alert('Please select a service date');
+                    return;
+                }
+
+                const newRecord = {
+                    id: Date.now(),
+                    date: serviceDate,
+                    type: serviceType,
+                    cost: serviceCost ? parseFloat(serviceCost) : 0,
+                    timestamp: new Date().toISOString()
+                };
+
+                const updatedHistory = [...serviceHistory, newRecord].sort((a, b) => new Date(a.date) - new Date(b.date));
+                setServiceHistory(updatedHistory);
+                localStorage.setItem('serviceHistory', JSON.stringify(updatedHistory));
+
+                // Reset form
+                setServiceDate('');
+                setServiceType('Regular Maintenance');
+                setServiceCost('');
+                setShowServiceForm(false);
+
+                alert('Service record added successfully!');
+            };
+
+            // Export service history to Excel
+            const exportToExcel = () => {
+                if (serviceHistory.length === 0) {
+                    alert('No service records to export');
+                    return;
+                }
+
+                try {
+                    // Prepare data for Excel
+                    const excelData = serviceHistory.map(record => ({
+                        'Service Date': record.date,
+                        'Service Type': record.type,
+                        'Cost ($)': record.cost || 0,
+                        'Days Since Last Service': calculateDaysSinceLastService(record.date),
+                        'Vehicle Uptime (Days)': calculateUptime(record.date)
+                    }));
+
+                    // Create workbook and worksheet
+                    const workbook = XLSX.utils.book_new();
+                    const worksheet = XLSX.utils.json_to_sheet(excelData);
+
+                    // Set column widths
+                    const colWidths = [
+                        { wch: 15 }, // Service Date
+                        { wch: 20 }, // Service Type
+                        { wch: 12 }, // Cost
+                        { wch: 22 }, // Days Since Last Service
+                        { wch: 20 }  // Vehicle Uptime
+                    ];
+                    worksheet['!cols'] = colWidths;
+
+                    // Add worksheet to workbook
+                    XLSX.utils.book_append_sheet(workbook, worksheet, 'Service History');
+
+                    // Generate filename with current date
+                    const today = new Date().toISOString().split('T')[0];
+                    const filename = `Car_Service_History_${today}.xlsx`;
+
+                    // Export file
+                    XLSX.writeFile(workbook, filename);
+                    
+                    alert(`Service history exported to ${filename}`);
+                } catch (error) {
+                    console.error('Export error:', error);
+                    alert('Failed to export data. Please try again.');
+                }
+            };
+
+            // Calculate days since last service
+            const calculateDaysSinceLastService = (currentDate) => {
+                const currentIndex = serviceHistory.findIndex(record => record.date === currentDate);
+                if (currentIndex === 0) return 'First Service';
+                
+                const previousService = serviceHistory[currentIndex - 1];
+                const daysDiff = Math.floor((new Date(currentDate) - new Date(previousService.date)) / (1000 * 60 * 60 * 24));
+                return daysDiff;
+            };
+
+            // Calculate uptime (days since first service)
+            const calculateUptime = (currentDate) => {
+                if (serviceHistory.length === 0) return 0;
+                const firstService = serviceHistory[0].date;
+                return Math.floor((new Date(currentDate) - new Date(firstService)) / (1000 * 60 * 60 * 24));
+            };
+
+            // FIXED: Create uptime chart with proper error handling and simplified configuration
+            useEffect(() => {
+                // Only create chart if we have multiple service records and a chart reference
+                if (serviceHistory.length > 1 && chartRef.current) {
+                    try {
+                        // Safely destroy existing chart
+                        if (chartInstance.current) {
+                            chartInstance.current.destroy();
+                            chartInstance.current = null;
+                        }
+
+                        const ctx = chartRef.current.getContext('2d');
+                        
+                        // Prepare chart data with proper indexing
+                        const chartData = serviceHistory.map((record, index) => {
+                            const uptime = calculateUptime(record.date);
+                            return {
+                                x: index + 1, // Use simple numeric x-axis instead of time scale
+                                y: uptime,
+                                label: record.date
+                            };
+                        });
+
+                        console.log('Creating chart with data:', chartData);
+
+                        // Create new chart with FIXED configuration
+                        chartInstance.current = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                datasets: [{
+                                    label: 'Vehicle Uptime (Days)',
+                                    data: chartData,
+                                    borderColor: '#22c55e',
+                                    backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                                    borderWidth: 3,
+                                    fill: true,
+                                    tension: 0.4,
+                                    pointBackgroundColor: '#22c55e',
+                                    pointBorderColor: '#ffffff',
+                                    pointBorderWidth: 2,
+                                    pointRadius: 6
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: {
+                                    title: {
+                                        display: true,
+                                        text: 'Vehicle Uptime Progression',
+                                        font: {
+                                            size: 16,
+                                            weight: 'bold'
+                                        },
+                                        color: '#374151'
+                                    },
+                                    legend: {
+                                        display: true,
+                                        position: 'top'
+                                    },
+                                    tooltip: {
+                                        callbacks: {
+                                            title: function(context) {
+                                                const index = context[0].dataIndex;
+                                                return `Service #${index + 1}: ${serviceHistory[index].date}`;
+                                            },
+                                            label: function(context) {
+                                                return `Uptime: ${context.parsed.y} days`;
+                                            }
+                                        }
+                                    }
+                                },
+                                scales: {
+                                    x: {
+                                        // FIXED: Use linear scale instead of time scale to avoid adapter issues
+                                        type: 'linear',
+                                        title: {
+                                            display: true,
+                                            text: 'Service Number'
+                                        },
+                                        ticks: {
+                                            stepSize: 1,
+                                            callback: function(value, index) {
+                                                return `#${Math.round(value)}`;
+                                            }
+                                        }
+                                    },
+                                    y: {
+                                        beginAtZero: true,
+                                        title: {
+                                            display: true,
+                                            text: 'Uptime (Days)'
+                                        }
+                                    }
+                                },
+                                // Add error handling
+                                onHover: (event, elements) => {
+                                    try {
+                                        // Handle hover events safely
+                                    } catch (err) {
+                                        console.warn('Chart hover error:', err);
+                                    }
+                                }
+                            }
+                        });
+
+                        console.log('Chart created successfully');
+
+                    } catch (error) {
+                        console.error('Chart creation error:', error);
+                        // Don't crash the whole app - just log the error
+                    }
+                }
+
+                // Cleanup function
+                return () => {
+                    try {
+                        if (chartInstance.current) {
+                            chartInstance.current.destroy();
+                            chartInstance.current = null;
+                        }
+                    } catch (err) {
+                        console.warn('Chart cleanup error:', err);
+                    }
+                };
+            }, [serviceHistory]); // Re-run when service history changes
+
+            const StatusCard = ({ status, children }) => {
+                const isGood = status === 0;
+                
+                return (
+                    <motion.div
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ duration: 0.5 }}
+                        className={`p-6 md:p-8 rounded-2xl shadow-lg backdrop-blur-md bg-opacity-20 ${
+                            isGood 
+                                ? 'bg-green-200 border border-green-300' 
+                                : 'bg-red-200 border border-red-300'
+                        }`}
+                    >
+                        <div className="text-center">
+                            <div className="text-6xl md:text-7xl mb-4">
+                                {isGood ? '✅' : '⚠️'}
+                            </div>
+                            {children}
+                        </div>
+                    </motion.div>
+                );
+            };
+
+            if (loading && carStatus === null) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            className="flex flex-col items-center"
+                        >
+                            <div className="w-16 h-16 border-4 border-white border-t-transparent rounded-full loading-spinner mb-4"></div>
+                            <p className="text-white text-xl">📡 Connecting to ESP32...</p>
+                            <p className="text-white text-sm mt-2">Channel: {CHANNEL_ID}</p>
+                        </motion.div>
+                    </div>
+                );
+            }
+
+            if (error && carStatus === null) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center p-4">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="p-6 md:p-8 rounded-2xl shadow-lg backdrop-blur-md bg-opacity-20 bg-red-200 border border-red-300 text-center max-w-md"
+                        >
+                            <div className="text-5xl mb-4">❌</div>
+                            <h2 className="text-xl font-bold text-white mb-2">Connection Error</h2>
+                            <p className="text-white text-sm mb-4">{error}</p>
+                            <button 
+                                onClick={fetchCarData}
+                                className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg transition-all duration-200"
+                            >
+                                 Retry Connection
+                            </button>
+                        </motion.div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-500 to-purple-600 p-4">
+                    <div className="max-w-4xl mx-auto pt-10">
+                        <motion.h1 
+                            initial={{ opacity: 0, y: -20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.2 }}
+                            className="text-3xl md:text-4xl font-bold text-white text-center mb-2"
+                        >
+                             Car Health Monitor
+                        </motion.h1>
+                        
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ delay: 0.3 }}
+                            className="text-center text-white text-sm mb-8 opacity-75"
+                        >
+                            <p>ESP32 Channel: {CHANNEL_ID} • Live Data Feed</p>
+                            <div className="flex items-center justify-center mt-2">
+                                <div className={`w-2 h-2 rounded-full mr-2 ${
+                                    connectionStatus === 'connected' ? 'bg-green-400' :
+                                    connectionStatus === 'fetching' ? 'bg-yellow-400' : 'bg-red-400'
+                                }`}></div>
+                                <span className="text-xs">
+                                    {connectionStatus === 'connected' ? 'Live Connected' :
+                                     connectionStatus === 'fetching' ? 'Fetching Data...' : 'Connection Error'}
+                                </span>
+                            </div>
+                        </motion.div>
+                        
+                        <div className="mb-8">
+                            {carStatus === 0 ? (
+                                <StatusCard status={0}>
+                                    <h2 className="text-xl md:text-2xl font-bold text-white mb-2">
+                                        System Status: GOOD
+                                    </h2>
+                                    <p className="text-white text-lg mb-4">
+                                        All systems operational 
+                                    </p>
+                                    <p className="text-white text-sm opacity-80">
+                                        Your vehicle is running smoothly
+                                    </p>
+                                </StatusCard>
+                            ) : (
+                                <>
+                                    <StatusCard status={1}>
+                                        <h2 className="text-xl md:text-2xl font-bold text-white mb-2">
+                                             System Status: WARNING
+                                        </h2>
+                                        <p className="text-white text-lg mb-4">
+                                            Issue detected! Please check your vehicle 
+                                        </p>
+                                        <p className="text-white text-sm opacity-80">
+                                            Recommended: Visit nearby service center
+                                        </p>
+                                    </StatusCard>
+                                    
+                                    <motion.div
+                                        initial={{ opacity: 0, y: 20 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: 0.3 }}
+                                        className="mt-6 rounded-2xl overflow-hidden shadow-lg"
+                                    >
+                                        <iframe
+                                            title="Nearby Service Centers"
+                                            width="100%"
+                                            height="300"
+                                            frameBorder="0"
+                                            style={{ border: 0 }}
+                                            src={`https://www.google.com/maps/embed/v1/search?key=AIzaSyBS-DHj_pr5OKuz2QeObbNCYxArN62kmN0&q=car+service+center+near+${location.city}`}
+                                            allowFullScreen
+                                        ></iframe>
+                                    </motion.div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Service Management Section */}
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.4 }}
+                            className="mb-8 p-6 rounded-2xl shadow-lg backdrop-blur-md bg-white bg-opacity-10 border border-white border-opacity-20"
+                        >
+                            <h3 className="text-xl font-bold text-white mb-4 flex items-center">
+                                 Service Management
+                            </h3>
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                <button 
+                                    onClick={() => setShowServiceForm(!showServiceForm)}
+                                    className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-all duration-200 flex items-center justify-center"
+                                >
+                                     Add Service Record
+                                </button>
+                                <button 
+                                    onClick={exportToExcel}
+                                    className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-all duration-200 flex items-center justify-center"
+                                    disabled={serviceHistory.length === 0}
+                                >
+                                     Export to Excel
+                                </button>
+                                <div className="text-center text-white">
+                                    <p className="text-sm opacity-80">Total Services: {serviceHistory.length}</p>
+                                </div>
+                            </div>
+
+                            {/* Service Form */}
+                            {showServiceForm && (
+                                <motion.div
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: 'auto' }}
+                                    className="p-4 bg-white bg-opacity-20 rounded-lg mb-4"
+                                >
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div>
+                                            <label className="block text-white text-sm mb-2">Service Date</label>
+                                            <input
+                                                type="date"
+                                                value={serviceDate}
+                                                onChange={(e) => setServiceDate(e.target.value)}
+                                                className="w-full p-2 rounded border border-gray-300"
+                                                max={new Date().toISOString().split('T')[0]}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-white text-sm mb-2">Service Type</label>
+                                            <select
+                                                value={serviceType}
+                                                onChange={(e) => setServiceType(e.target.value)}
+                                                className="w-full p-2 rounded border border-gray-300"
+                                            >
+                                                <option>Regular Maintenance</option>
+                                                <option>Oil Change</option>
+                                                <option>Brake Service</option>
+                                                <option>Tire Replacement</option>
+                                                <option>Engine Repair</option>
+                                                <option>Transmission Service</option>
+                                                <option>Other</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-white text-sm mb-2">Cost ($)</label>
+                                            <input
+                                                type="number"
+                                                value={serviceCost}
+                                                onChange={(e) => setServiceCost(e.target.value)}
+                                                placeholder="Optional"
+                                                className="w-full p-2 rounded border border-gray-300"
+                                                min="0"
+                                                step="0.01"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="mt-4 flex justify-end space-x-2">
+                                        <button
+                                            onClick={() => setShowServiceForm(false)}
+                                            className="px-4 py-2 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-all duration-200"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={addServiceRecord}
+                                            className="px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-all duration-200"
+                                        >
+                                            Save Record
+                                        </button>
+                                    </div>
+                                </motion.div>
+                            )}
+
+                            {/* Recent Service Records */}
+                            {serviceHistory.length > 0 && (
+                                <div className="mb-4">
+                                    <h4 className="text-lg font-semibold text-white mb-2">Recent Services</h4>
+                                    <div className="max-h-40 overflow-y-auto">
+                                        {serviceHistory.slice(-3).reverse().map((record) => (
+                                            <div key={record.id} className="bg-white bg-opacity-20 p-3 rounded mb-2">
+                                                <div className="flex justify-between items-center text-white text-sm">
+                                                    <span>{record.date} - {record.type}</span>
+                                                    {record.cost > 0 && <span>${record.cost}</span>}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </motion.div>
+
+                        {/* FIXED: Uptime Chart with Error Boundary */}
+                        {serviceHistory.length > 1 && (
+                            <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.5 }}
+                                className="mb-8 p-6 rounded-2xl shadow-lg backdrop-blur-md bg-white bg-opacity-10 border border-white border-opacity-20"
+                            >
+                                <h3 className="text-xl font-bold text-white mb-4 flex items-center">
+                                     Vehicle Uptime Analysis
+                                </h3>
+                                <ChartErrorBoundary>
+                                    <div className="bg-white rounded-lg p-4" style={{ height: '400px' }}>
+                                        <canvas ref={chartRef}></canvas>
+                                    </div>
+                                </ChartErrorBoundary>
+                            </motion.div>
+                        )}
+                        
+                        {/* Real-time Status Info */}
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ delay: 0.6 }}
+                            className="text-center text-white text-sm bg-black bg-opacity-20 p-4 rounded-lg backdrop-blur-sm mb-6"
+                        >
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                <p> Real-time ESP32 data</p>
+                                <p> Auto-refresh: Every 8 seconds</p>
+                                <p> Last updated: {lastUpdated.toLocaleTimeString()}</p>
+                                <p> Location: {location.city} ({location.lat}°N, {location.lng}°E)</p>
+                            </div>
+                            {loading && <p className="mt-2 text-yellow-200"> Syncing with ThingSpeak...</p>}
+                        </motion.div>
+
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ delay: 0.7 }}
+                            className="text-center"
+                        >
+                            <button 
+                                onClick={fetchCarData}
+                                disabled={loading}
+                                className="px-6 py-3 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed backdrop-blur-sm"
+                            >
+                                {loading ? '🔄 Syncing...' : '🔄 Refresh Now'}
+                            </button>
+                        </motion.div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<CarHealthMonitor />);
+    </script>
+</body>
+</html>
