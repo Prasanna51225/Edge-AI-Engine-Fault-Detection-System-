@@ -99,8 +99,8 @@
             });
 
             // ThingSpeak channel configuration
-            const CHANNEL_ID = '3040064';
-            const READ_API_KEY = '5Z2002LZQRPQLVDS';
+            const CHANNEL_ID = 'YOUR_CHANNEL_ID';
+            const READ_API_KEY = 'YOUR_READ_API_KEY';
 
             // Load service history from localStorage on component mount
             useEffect(() => {
@@ -539,7 +539,7 @@
                                             height="300"
                                             frameBorder="0"
                                             style={{ border: 0 }}
-                                            src={`https://www.google.com/maps/embed/v1/search?key=AIzaSyBS-DHj_pr5OKuz2QeObbNCYxArN62kmN0&q=car+service+center+near+${location.city}`}
+                                            src={`https://www.google.com/maps/embed/v1/search?key=YOUR_GOOGLE_MAPS_API_KEY`}
                                             allowFullScreen
                                         ></iframe>
                                     </motion.div>
