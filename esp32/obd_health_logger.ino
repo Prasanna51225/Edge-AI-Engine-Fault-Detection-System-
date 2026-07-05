@@ -7,11 +7,11 @@
 #define UART_BAUD 115200
 
 // WiFi credentials
-const char* ssid = "hello1";
-const char* password = "pk123456";
+const char* ssid = "Your WIFI SSID";
+const char* password = "Password";
 
 // ThingSpeak settings
-const char* thingSpeakApiKey = "CUOOC8D9K47RSMQV";
+const char* thingSpeakApiKey = "YOUR_THINGSPEAK_WRITE_API_KEY";
 const char* thingSpeakServer = "http://api.thingspeak.com/update";
 
 // Variables for data processing
