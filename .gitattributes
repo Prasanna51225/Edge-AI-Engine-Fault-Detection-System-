@@ -1,1 +1,17 @@
+# Ignore HTML
 *.html linguist-generated=true
+
+# Ignore C source files
+*.c linguist-generated=true
+
+# Ignore C++ source files
+*.cpp linguist-generated=true
+*.cc linguist-generated=true
+*.cxx linguist-generated=true
+*.hpp linguist-generated=true
+*.h linguist-generated=true
+
+# Ignore generated folders
+dist/** linguist-generated=true
+build/** linguist-generated=true
+coverage/** linguist-generated=true
